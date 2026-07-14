@@ -74,18 +74,25 @@ impl<R: Read> ReadTsPacket for TsPacketReader<R> {
                     TsPayload::Raw(bytes)
                 }
                 _ => {
-                    let kind = self.pids.get(&header.pid).cloned().ok_or_else(|| {
-                        crate::Error::invalid_input(format!("Unknown PID: header={:?}", header))
-                    })?;
+                    // If we don't yet know this PID's role (e.g., the PMT
+                    // hasn't been parsed yet when the receiver joins
+                    // mid-stream), consume the rest of the packet and return
+                    // it as Raw bytes rather than erroring out and leaving
+                    // the byte stream misaligned.
+                    let kind = self.pids.get(&header.pid).cloned();
                     match kind {
-                        PidKind::Pmt => {
+                        None => {
+                            let bytes = Bytes::read_from(&mut reader)?;
+                            TsPayload::Raw(bytes)
+                        }
+                        Some(PidKind::Pmt) => {
                             let pmt = Pmt::read_from(&mut reader)?;
                             for es in &pmt.es_info {
                                 self.pids.insert(es.elementary_pid, PidKind::Pes);
                             }
                             TsPayload::Pmt(pmt)
                         }
-                        PidKind::Pes => {
+                        Some(PidKind::Pes) => {
                             if payload_unit_start_indicator {
                                 let pes = Pes::read_from(&mut reader)?;
                                 TsPayload::PesStart(pes)
