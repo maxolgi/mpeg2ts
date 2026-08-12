@@ -24,7 +24,7 @@ pub struct Pmt {
 impl Pmt {
     const TABLE_ID: u8 = 2;
 
-    pub(super) fn read_from<R: Read>(reader: R) -> Result<Self> {
+    pub fn read_from<R: Read>(reader: R) -> Result<Self> {
         let mut psi = Psi::read_from(reader)?;
         if psi.tables.len() != 1 {
             return Err(Error::invalid_input("Expected exactly one PSI table"));
