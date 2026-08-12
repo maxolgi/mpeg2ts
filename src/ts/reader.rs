@@ -2,7 +2,7 @@ use crate::Result;
 use crate::ts::payload::{Bytes, Null, Pat, Pes, Pmt};
 use crate::ts::{AdaptationField, Pid, TsHeader, TsPacket, TsPayload};
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Cursor, Read};
 
 /// The `ReadTsPacket` trait allows for reading TS packets from a source.
 pub trait ReadTsPacket {
@@ -86,11 +86,22 @@ impl<R: Read> ReadTsPacket for TsPacketReader<R> {
                             TsPayload::Raw(bytes)
                         }
                         Some(PidKind::Pmt) => {
-                            let pmt = Pmt::read_from(&mut reader)?;
-                            for es in &pmt.es_info {
-                                self.pids.insert(es.elementary_pid, PidKind::Pes);
+                            // Read payload bytes first so we can fall back
+                            // to Raw if the PSI section spans multiple TS
+                            // packets (large PMT with many elementary streams).
+                            let mut payload_buf = Vec::new();
+                            reader.by_ref().read_to_end(&mut payload_buf)?;
+                            match Pmt::read_from(Cursor::new(&payload_buf)) {
+                                Ok(pmt) => {
+                                    for es in &pmt.es_info {
+                                        self.pids.insert(es.elementary_pid, PidKind::Pes);
+                                    }
+                                    TsPayload::Pmt(pmt)
+                                }
+                                Err(_) => {
+                                    TsPayload::Raw(Bytes::new(&payload_buf)?)
+                                }
                             }
-                            TsPayload::Pmt(pmt)
                         }
                         Some(PidKind::Pes) => {
                             if payload_unit_start_indicator {
