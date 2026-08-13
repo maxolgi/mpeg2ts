@@ -36,6 +36,13 @@ impl<R: Read> TsPacketReader<R> {
     pub fn into_stream(self) -> R {
         self.stream
     }
+
+    /// Register a PID as carrying PES packets, so the reader parses
+    /// future packets on that PID as PesStart/PesContinuation instead
+    /// of Raw. Needed when the caller does its own PMT reassembly.
+    pub fn register_pes_pid(&mut self, pid: Pid) {
+        self.pids.insert(pid, PidKind::Pes);
+    }
 }
 impl<R: Read> ReadTsPacket for TsPacketReader<R> {
     fn read_ts_packet(&mut self) -> Result<Option<TsPacket>> {
