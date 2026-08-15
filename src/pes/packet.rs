@@ -44,6 +44,39 @@ impl PesHeader {
         3 + self.pts.map_or(0, |_| 5) + self.dts.map_or(0, |_| 5) + self.escr.map_or(0, |_| 6)
     }
 
+    /// Calculates the length in bytes of the elementary stream payload carried
+    /// by a PES packet that has this header.
+    ///
+    /// Per ISO/IEC 13818-1, `PES_packet_length` is the 16-bit field following
+    /// the `stream_id` in the PES header, and it specifies the number of bytes
+    /// in the PES packet **following the final byte of the field itself** —
+    /// i.e., it counts both the optional PES header *and* the ES payload.
+    /// The ES payload length is therefore `pes_packet_len` reduced by the
+    /// optional header length (`optional_header_len()`).
+    ///
+    /// A `pes_packet_len` of `0` means the PES packet length is unbounded
+    /// (only permitted for video elementary streams in transport streams),
+    /// in which case `Ok(None)` is returned.
+    ///
+    /// # Errors
+    ///
+    /// If `pes_packet_len` is nonzero but smaller than the optional header
+    /// length, the PES packet is malformed and an `ErrorKind::InvalidInput`
+    /// error is returned.
+    pub fn es_payload_len(&self, pes_packet_len: u16) -> Result<Option<usize>> {
+        if pes_packet_len == 0 {
+            return Ok(None);
+        }
+        let optional_header_len = self.optional_header_len();
+        if pes_packet_len < optional_header_len {
+            return Err(Error::invalid_input(format!(
+                "pes.pes_packet_len={}, optional_header_len={}",
+                pes_packet_len, optional_header_len
+            )));
+        }
+        Ok(Some((pes_packet_len - optional_header_len) as usize))
+    }
+
     pub(crate) fn read_from<R: Read>(mut reader: R) -> Result<(Self, u16)> {
         let packet_start_code_prefix = reader.read_uint::<3>()?;
         if packet_start_code_prefix != PACKET_START_CODE_PREFIX {
@@ -205,5 +238,69 @@ impl PesHeader {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::ErrorKind;
+
+    fn make_header(pts: Option<u64>, dts: Option<u64>, escr: Option<u64>) -> PesHeader {
+        PesHeader {
+            stream_id: StreamId::new_audio(StreamId::AUDIO_MIN).unwrap(),
+            priority: false,
+            data_alignment_indicator: false,
+            copyright: false,
+            original_or_copy: false,
+            pts: pts.map(|n| Timestamp::new(n).unwrap()),
+            dts: dts.map(|n| Timestamp::new(n).unwrap()),
+            escr: escr.map(|n| ClockReference::new(n).unwrap()),
+        }
+    }
+
+    #[test]
+    fn es_payload_len_pts_only() {
+        // Audio-style PES: optional header = 3 + 5 (PTS) = 8 bytes.
+        let header = make_header(Some(0), None, None);
+        assert_eq!(header.es_payload_len(3 + 5 + 100).unwrap(), Some(100));
+        assert_eq!(header.es_payload_len(3 + 5).unwrap(), Some(0));
+    }
+
+    #[test]
+    fn es_payload_len_pts_dts() {
+        // Optional header = 3 + 5 (PTS) + 5 (DTS) = 13 bytes.
+        let header = make_header(Some(0), Some(90_000), None);
+        assert_eq!(header.es_payload_len(3 + 5 + 5 + 7).unwrap(), Some(7));
+    }
+
+    #[test]
+    fn es_payload_len_escr() {
+        // Optional header = 3 + 6 (ESCR) = 9 bytes, or 3 + 5 + 6 = 14 with PTS.
+        let header = make_header(None, None, Some(0));
+        assert_eq!(header.es_payload_len(3 + 6 + 21).unwrap(), Some(21));
+        let header = make_header(Some(0), None, Some(0));
+        assert_eq!(header.es_payload_len(3 + 5 + 6 + 21).unwrap(), Some(21));
+    }
+
+    #[test]
+    fn es_payload_len_unbounded() {
+        // A zero PES_packet_length means unbounded (e.g., video PES in TS).
+        assert_eq!(
+            make_header(Some(0), None, None).es_payload_len(0).unwrap(),
+            None
+        );
+        assert_eq!(
+            make_header(None, None, None).es_payload_len(0).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn es_payload_len_too_small_pes_packet_len() {
+        let header = make_header(Some(0), None, None); // optional header = 8 bytes
+        let err = header.es_payload_len(7).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::InvalidInput);
+        assert_eq!(err.reason, "pes.pes_packet_len=7, optional_header_len=8");
     }
 }

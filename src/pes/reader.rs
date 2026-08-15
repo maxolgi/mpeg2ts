@@ -56,18 +56,7 @@ impl<R: ReadTsPacket> PesPacketReader<R> {
         pid: Pid,
         pes: Pes,
     ) -> Result<Option<PesPacket<Vec<u8>>>> {
-        let data_len = if pes.pes_packet_len == 0 {
-            None
-        } else {
-            let optional_header_len = pes.header.optional_header_len();
-            if pes.pes_packet_len < optional_header_len {
-                return Err(Error::invalid_input(format!(
-                    "pes.pes_packet_len={}, optional_header_len={}",
-                    pes.pes_packet_len, optional_header_len
-                )));
-            }
-            Some((pes.pes_packet_len - optional_header_len) as usize)
-        };
+        let data_len = pes.header.es_payload_len(pes.pes_packet_len)?;
 
         let mut data = Vec::with_capacity(data_len.unwrap_or(pes.data.len()));
         data.extend_from_slice(&pes.data);
