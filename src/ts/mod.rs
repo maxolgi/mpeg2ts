@@ -4,6 +4,7 @@
 //!
 //! - [MPEG transport stream](https://en.wikipedia.org/wiki/MPEG_transport_stream)
 pub use self::adaptation_field::{AdaptationExtensionField, AdaptationField};
+pub use self::cc::{CcChecker, CcStatus};
 pub use self::packet::{TsHeader, TsPacket, TsPayload};
 pub use self::pat::ProgramAssociation;
 pub use self::pmt::{Descriptor, EsInfo};
@@ -26,6 +27,7 @@ pub mod payload {
 }
 
 mod adaptation_field;
+mod cc;
 mod null;
 mod packet;
 mod pat;
