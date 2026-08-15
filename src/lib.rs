@@ -21,7 +21,7 @@ pub mod pes;
 pub mod time;
 pub mod ts;
 
-mod crc;
+pub mod crc;
 mod error;
 mod util;
 

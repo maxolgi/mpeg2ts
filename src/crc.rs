@@ -1,3 +1,9 @@
+//! CRC-32/MPEG-2 (polynomial `0x04C11DB7`) computation for PSI sections.
+
+/// Lookup table for the CRC-32/MPEG-2 computation.
+///
+/// Note: the last entry (`0x00000001`) is a spare value that is never
+/// indexed; only the first 256 entries are meaningful.
 #[allow(clippy::unreadable_literal)]
 pub const CRC32_TABLE: &[u32] = &[
     0x00000000, 0xB71DC104, 0x6E3B8209, 0xD926430D, 0xDC760413, 0x6B6BC517, 0xB24D861A, 0x0550471E,
@@ -35,18 +41,22 @@ pub const CRC32_TABLE: &[u32] = &[
     0x00000001,
 ];
 
+/// Incremental CRC-32/MPEG-2 calculator.
 #[derive(Debug)]
 pub struct Crc32(u32);
 impl Crc32 {
+    /// Makes a new `Crc32` instance.
     pub fn new() -> Self {
         Crc32(0xFFFF_FFFF)
     }
+    /// Updates the checksum with the given bytes.
     pub fn update(&mut self, data: &[u8]) {
         for b in data {
             let i = self.0 as u8;
             self.0 = CRC32_TABLE[(i ^ b) as usize] ^ (self.0 >> 8);
         }
     }
+    /// Returns the current checksum value.
     pub fn value(&self) -> u32 {
         self.0.swap_bytes()
     }

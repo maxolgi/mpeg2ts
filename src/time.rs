@@ -58,7 +58,10 @@ impl Timestamp {
         Self::from_u64(n)
     }
 
-    pub(crate) fn write_to<W: Write>(&self, mut writer: W, check_bits: u8) -> Result<()> {
+    /// Writes the 5-byte PTS/DTS representation of the timestamp to the
+    /// given writer, including the marker bits and the 4-bit `check_bits`
+    /// prefix (`0b0010` for a lone PTS, `0b0011`/`0b0001` for PTS/DTS pairs).
+    pub fn write_to<W: Write>(&self, mut writer: W, check_bits: u8) -> Result<()> {
         let n0 = u64::from(check_bits);
         let n1 = self.0 >> 30;
         let n2 = (self.0 >> 15) & ((1 << 15) - 1);
@@ -67,6 +70,19 @@ impl Timestamp {
         let n = (n0 << 36) | (n1 << 33) | (1 << 32) | (n2 << 17) | (1 << 16) | (n3 << 1) | 1;
         writer.write_uint::<5>(n)?;
         Ok(())
+    }
+
+    /// Encodes the timestamp into a 5-byte big-endian array, including the
+    /// marker bits and the 4-bit `check_bits` prefix.
+    ///
+    /// This is a byte-level convenience wrapper around
+    /// [`Timestamp::write_to`][Self::write_to] for callers that want the
+    /// encoded bytes directly.
+    pub fn to_bytes(self, check_bits: u8) -> [u8; 5] {
+        let mut buf = [0; 5];
+        self.write_to(&mut buf[..], check_bits)
+            .expect("unreachable: writing 5 bytes into a 5-byte buffer");
+        buf
     }
 }
 impl From<u32> for Timestamp {
@@ -109,13 +125,34 @@ impl ClockReference {
         Ok(ClockReference(base * 300 + extension))
     }
 
-    pub(crate) fn write_pcr_to<W: Write>(&self, mut writer: W) -> Result<()> {
+    /// Writes the 6-byte PCR representation of the clock reference to the
+    /// given writer (33-bit base, 6 zero reserved bits, 9-bit extension).
+    ///
+    /// Note that [`ClockReference::pcr_to_bytes`][Self::pcr_to_bytes] emits
+    /// the spec-conformant `'111111'` reserved bits instead.
+    pub fn write_pcr_to<W: Write>(&self, mut writer: W) -> Result<()> {
         let base = self.0 / 300;
         let extension = self.0 % 300;
 
         let n = (base << 15) | extension;
         writer.write_uint::<6>(n)?;
         Ok(())
+    }
+
+    /// Encodes the clock reference into a 6-byte big-endian PCR array:
+    /// 33-bit base, 6 reserved bits set to `'111111'`, 9-bit extension,
+    /// as required by ISO/IEC 13818-1 §2.4.4.9 (and as emitted by ffmpeg).
+    pub fn pcr_to_bytes(self) -> [u8; 6] {
+        let base = self.0 / 300;
+        let extension = self.0 % 300;
+        [
+            (base >> 25) as u8,
+            (base >> 17) as u8,
+            (base >> 9) as u8,
+            (base >> 1) as u8,
+            (((base & 1) << 7) | 0x7E | u64::from(extension >> 8)) as u8,
+            (extension & 0xFF) as u8,
+        ]
     }
 
     pub(crate) fn read_escr_from<R: Read>(mut reader: R) -> Result<Self> {
@@ -190,6 +227,19 @@ mod test {
         cr.write_pcr_to(&mut buf).unwrap();
         let new_cr = ClockReference::read_pcr_from(&buf[..]).unwrap();
         assert_eq!(cr, new_cr);
+    }
+
+    #[test]
+    fn pcr_bytes_layout() {
+        let cr = ClockReference::new((0x1234567 << 1) * 300 + 5).unwrap();
+        let bytes = cr.pcr_to_bytes();
+        assert_eq!(bytes.len(), 6);
+        assert_eq!(bytes[4] & 0x7E, 0x7E, "reserved bits must be '111111'");
+        assert_eq!(
+            ClockReference::read_pcr_from(&bytes[..]).unwrap(),
+            cr,
+            "pcr_to_bytes must round-trip through read_pcr_from"
+        );
     }
 
     #[test]
